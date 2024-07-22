@@ -1,0 +1,135 @@
+CREATE DATABASE DEMO_DB;
+
+CREATE OR REPLACE TRANSIENT TABLE DEMO_DB.PUBLIC.CUSTOMER_TEST
+AS
+SELECT * FROM 
+"SFSALESSHARED_SFC_SAMPLES_AZCENTRALINDIA_SAMPLE_DATA"."TPCDS_SF100TCL"."CUSTOMER";
+
+
+create or replace STORAGE INTEGRATION my_s3_integration_external
+  type = External_stage
+  storage_provider = s3
+  enabled = true
+  storage_aws_role_arn = 'arn:aws:iam::980214504837:role/AWS-Role1-SF'
+  storage_allowed_locations = ('s3://myaws-snowflake-1st/CSV/');
+
+  create or replace file format MY_CSV_FORMAT
+type = 'csv';
+
+  create or replace stage my_s3_assignment
+  storage_integration = my_s3_integration_external
+  url = 's3://myaws-snowflake-1st/CSV/'
+  file_format = MY_CSV_FORMAT;
+
+  describe integration my_s3_integration_external;
+
+  COPY INTO @DEMO_DB.PUBLIC.my_s3_assignment/CSV/
+from
+DEMO_DB.PUBLIC.CUSTOMER_TEST;
+
+
+SELECT $1 C_CUSTOMER_SK,
+$2 C_CUSTOMER_ID ,
+$3 C_CURRENT_CDEMO_SK ,
+$4 C_CURRENT_HDEMO_SK ,
+$5 C_CURRENT_ADDR_SK,
+$6 C_FIRST_SHIPTO_DATE_SK ,
+$7 C_FIRST_SALES_DATE_SK ,
+$8 C_SALUTATION ,
+$9 C_FIRST_NAME ,
+$10 C_LAST_NAME,
+$11 C_PREFERRED_CUST_FLAG ,
+$12 C_BIRTH_DAY ,
+$13 C_BIRTH_MONTH ,
+$14 C_BIRTH_YEAR,
+$16 C_LOGIN ,
+$17 C_EMAIL_ADDRESS ,
+$18 C_LAST_REVIEW_DATE
+FROM @DEMO_DB.PUBLIC.my_s3_assignment/CSV/. ---replace it with new stage 
+(file_format => DEMO_DB.PUBLIC.MY_CSV_FORMAT);
+
+
+SELECT $1 C_CUSTOMER_SK,
+$2 C_CUSTOMER_ID ,
+$3 C_CURRENT_CDEMO_SK ,
+$4 C_CURRENT_HDEMO_SK ,
+$5 C_CURRENT_ADDR_SK,
+$6 C_FIRST_SHIPTO_DATE_SK ,
+$7 C_FIRST_SALES_DATE_SK ,
+$8 C_SALUTATION ,
+$9 C_FIRST_NAME ,
+$10 C_LAST_NAME,
+$11 C_PREFERRED_CUST_FLAG ,
+$12 C_BIRTH_DAY ,
+$13 C_BIRTH_MONTH ,
+$14 C_BIRTH_YEAR,
+$16 C_LOGIN ,
+$17 C_EMAIL_ADDRESS ,
+$18 C_LAST_REVIEW_DATE
+FROM @DEMO_DB.PUBLIC.my_s3_assignment/CSV/
+(file_format => DEMO_DB.PUBLIC.MY_CSV_FORMAT)
+WHERE C_CUSTOMER_SK ='64596949';
+
+
+SELECT $9 C_FIRST_NAME,$10 C_LAST_NAME,COUNT(*)
+FROM @DEMO_DB.PUBLIC.my_s3_assignment/CSV/
+(file_format => DEMO_DB.PUBLIC.MY_CSV_FORMAT)
+GROUP BY $9,$10;
+
+CREATE OR REPLACE VIEW CUSTOMER_DATA
+AS
+SELECT $1 C_CUSTOMER_SK,
+$2 C_CUSTOMER_ID ,
+$3 C_CURRENT_CDEMO_SK ,
+$4 C_CURRENT_HDEMO_SK ,
+$5 C_CURRENT_ADDR_SK,
+$6 C_FIRST_SHIPTO_DATE_SK ,
+$7 C_FIRST_SALES_DATE_SK ,
+$8 C_SALUTATION ,
+$9 C_FIRST_NAME ,
+$10 C_LAST_NAME,
+$11 C_PREFERRED_CUST_FLAG ,
+$12 C_BIRTH_DAY ,
+$13 C_BIRTH_MONTH ,
+$14 C_BIRTH_YEAR,
+$16 C_LOGIN ,
+$17 C_EMAIL_ADDRESS ,
+$18 C_LAST_REVIEW_DATE
+FROM @DEMO_DB.PUBLIC.my_s3_assignment/CSV/
+(file_format => DEMO_DB.PUBLIC.MY_CSV_FORMAT);
+
+SELECT * FROM CUSTOMER_DATA;
+
+Now we can directly query data from s3 through view. What is the disadvantage of using 
+this approach ? Can you see partitions being scanned in the backend ?
+ANswer:DISADVANTAGE is this view created withput partitions hence it will scan through all the data and will take time to return the results.
+
+
+
+Create or replace transient table CUSTOMER_SNOWFLAKE_TABLE
+AS
+SELECT * FROM CUSTOMER_TEST limit 10000;
+
+SELECT B.* 
+FROM CUSTOMER_SNOWFLAKE_TABLE B
+LEFT OUTER JOIN 
+CUSTOMER_DATA A
+ON
+A.C_CUSTOMER_SK = B.C_CUSTOMER_SK;
+
+How many partitions got scanned from snowflake table : zero partitions as we have not created any partitions.
+
+COPY INTO @DEMO_DB.PUBLIC.my_s3_assignment/Customer-joined-data-asgnmnt2/
+from(
+SELECT B.* 
+FROM CUSTOMER_SNOWFLAKE_TABLE B
+LEFT OUTER JOIN 
+CUSTOMER_DATA A
+ON
+A.C_CUSTOMER_SK = B.C_CUSTOMER_SK
+);
+
+
+ ADVANTAGES AND DISADVANTAGES - Advantages are when we are dealing with outside snowflake data, we wont be charged for storage we just need to enable the configuration to read the data from exteranal stage.
+ also when we have to perform any specific transformations better to filter or restrict the data instead of processing the full data (considering the computation credits)
+ When dealing with huge data we need to implement partitions which will make the application faster.
