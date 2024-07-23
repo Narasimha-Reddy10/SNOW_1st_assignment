@@ -117,7 +117,7 @@ CUSTOMER_DATA A
 ON
 A.C_CUSTOMER_SK = B.C_CUSTOMER_SK;
 
-How many partitions got scanned from snowflake table : zero partitions as we have not created any partitions.
+How many partitions got scanned from snowflake table : 355 partitions 
 
 COPY INTO @DEMO_DB.PUBLIC.my_s3_assignment/Customer-joined-data-asgnmnt2/
 from(
