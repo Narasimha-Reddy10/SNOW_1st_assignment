@@ -1,0 +1,211 @@
+CREATE OR REPLACE DATABASE ASSIGNMENT3;
+CREATE OR REPLACE SCHEMA PERSON_SCHEMA;
+
+SHOW ROLES;
+show SCHEMAS;
+
+-- Create Stage: Use below SQL statement in Snowflake 
+-- to create external stage on s3(AWS)
+CREATE OR REPLACE STAGE ASSIGNMENT3.PERSON_SCHEMA.PERSON_DATA_JSON_A3
+URL='s3://snowflake-assignment3/snowflake-assignment3/'
+CREDENTIALS=(AWS_KEY_ID='AKIA5FTZBH4PMDA3GEF3' 
+AWS_SECRET_KEY='M5Nt+OGnUpRnhhkuNPromHCz6GOJfwZXb64vVpp+');
+
+list @ASSIGNMENT3.PERSON_SCHEMA.PERSON_DATA_JSON_A3;
+desc stage ASSIGNMENT3.PERSON_SCHEMA.PERSON_DATA_JSON_A3;
+-- CREATE table in Snowflake with VARIANT column.
+CREATE OR REPLACE TABLE PERSON (PERSONDATA VARIANT);
+
+-- Create a Snowpipe with Auto Ingest Enabled
+
+CREATE OR REPLACE PIPE person_data_pipe AUTO_INGEST = TRUE AS
+COPY INTO PERSON
+FROM (
+    SELECT
+    OBJECT_CONSTRUCT(
+        'ID', $1,
+        'Name', $2,
+        'Age', $3,
+        'Location', $4,
+        'Zip', IFF($5 = '' OR $5 IS NULL, '00000', $5),
+        'Filename', METADATA$FILENAME,
+        'FileRowNumber', METADATA$FILE_ROW_NUMBER,
+        'IngestedTimestamp', TO_TIMESTAMP_NTZ(CURRENT_TIMESTAMP)
+    ) AS person
+    FROM @PERSON_DATA_JSON_A3
+)
+ON_ERROR = CONTINUE;
+
+-- lISTING
+SHOW PIPES;
+
+
+-- Subscribe the Snowflake SQS Queue in s3:
+
+
+
+-- Below are few ways we can validation if Snowpipe ran 
+-- successfully.
+-- 1 . Check the pipe status using below command, it shows 
+-- RUNNIG and it also shows pendingFileCount.
+
+
+select system$pipe_status('PERSON_DATA_PIPE');
+
+-- Check COPY_HISTORY for the table you are loading data to. If 
+-- there is any error with Data Load, you can find that error here to 
+-- debug the Load issue
+select * from table (information_schema.
+copy_history(table_name=>'person',start_time=>dateadd(hours,-1, current_timestamp())));
+
+select * from person;
+
+-- stream is creating
+
+create or replace stream personstream on table person;
+
+desc stream personstream;
+-- to see the arn on notification/
+desc pipe person_data_pipe;
+-- Crating stored procedure----
+
+
+
+-- Table for storing age information
+CREATE TABLE PERSON_AGE (
+    Name VARCHAR(100),
+    Age INT
+);
+
+-- Table for storing location information
+CREATE TABLE PERSON_LOCATION (
+    Name VARCHAR(100),
+    Location VARCHAR(100)
+);
+
+
+CREATE OR REPLACE TABLE PERSON_MASTER (
+    Name STRING,
+    Age INT,
+    Location STRING,
+    Zip STRING
+);
+
+-- working code of procedure
+-- CREATE OR REPLACE PROCEDURE PERSON_MASTER_PROCEDURE()
+-- RETURNS STRING
+-- LANGUAGE SQL
+-- AS
+-- DECLARE
+--     stmt1 STRING;
+--     stmt2 STRING;
+-- BEGIN
+--     -- Statement to insert data into PERSON_LOCATION table
+
+    
+--     stmt1 := '
+--         INSERT INTO PERSON_AGE (Name, Age)
+-- SELECT 
+--     PERSON:name::string as Name,
+--     PERSON:age::int as Age
+-- FROM PERSON;
+--     ';
+
+--     -- Statement to insert data into PERSON_AGE table
+--     stmt2 := '
+--         INSERT INTO PERSON_AGE (Name, Age)
+--         PERSON:name::string as Name,
+--     PERSON:location::string as Age
+--     FROM PERSON;
+--     ';
+
+--     -- Execute the statements
+--     EXECUTE IMMEDIATE stmt1;
+--     EXECUTE IMMEDIATE stmt2;
+
+--     RETURN 'Stored procedure executed successfully.';
+-- END;
+
+
+
+CREATE OR REPLACE PROCEDURE PERSON_MASTER_PROCEDURE()
+RETURNS STRING
+LANGUAGE SQL
+AS
+
+DECLARE
+    stmt1 STRING;
+    stmt2 STRING;
+    stmt3 STRING;
+BEGIN
+    -- Statement to insert cleaned data into PERSON_MASTER table
+    stmt3 := '
+        INSERT INTO PERSON_MASTER (Name, Age, Location, Zip)
+        SELECT
+            TRIM(BOTH \'""\' FROM PERSONDATA:Name::string) AS Name,
+            TRY_CAST(REGEXP_SUBSTR(PERSONDATA:Age::string, \'\\d+\') AS INT) AS Age,
+            TRIM(BOTH \'""\' FROM PERSONDATA:Location::string) AS Location,
+            TRIM(BOTH \'""\' FROM PERSONDATA:Zip::string) AS Zip
+        FROM PERSON;
+    ';
+
+    -- Statement to insert data into PERSON_AGE table (Name and Age)
+    stmt1 := '
+        INSERT INTO PERSON_AGE (Name, Age)
+        SELECT 
+            PERSONDATA:Name::string AS Name,
+            TRY_CAST(REGEXP_SUBSTR(PERSONDATA:Age::string, \'\\d+\') AS INT) AS Age
+        FROM PERSON;
+    ';
+
+    -- Statement to insert data into PERSON_AGE table (Name and Location)
+    stmt2 := '
+        INSERT INTO PERSON_AGE (Name, Age)
+        SELECT 
+            PERSONDATA:Name::string AS Name,
+            TRY_CAST(REGEXP_SUBSTR(PERSONDATA:Age::string, \'\\d+\') AS INT) AS Age
+        FROM PERSON;
+    ';
+
+    -- Execute the statements
+    EXECUTE IMMEDIATE stmt3;
+    EXECUTE IMMEDIATE stmt1;
+    EXECUTE IMMEDIATE stmt2;
+
+    RETURN 'Stored procedure executed successfully.';
+END;
+
+
+
+select * from PERSON;
+select * from PERSON_MASTER;
+
+
+
+CREATE OR REPLACE TASK ASSIGNMENT3.PERSON_SCHEMA.PERSON_TASK
+WAREHOUSE='COMPUTE_WH'
+SCHEDULE='1 minute'
+WHEN SYSTEM$STREAM_HAS_DATA('ASSIGNMENT3.PERSON_SCHEMA.personstream') AS
+CALL ASSIGNMENT3.PERSON_SCHEMA.PERSON_MASTER_PROCEDURE();
+
+
+alter task PERSON_TASK resume;
+list @PERSON_DATA_JSON_A3;
+alter pipe PERSON_DATA_PIPE refresh;
+select * from PERSON_AGE;
+show tasks;
+
+
+-- -- creating task
+
+-- CREATE OR REPLACE TASK ASSIGNMENT3.PERSON_SCHEMA.person_task_dummy
+ 
+-- WAREHOUSE='COMPUTE_WH'
+ 
+-- SCHEDULE='1 minute'
+
+-- CREATE OR REPLACE TASK ASSIGNMENT3.PERSON_SCHEMA.PERSON_TASK
+-- WAREHOUSE='COMPUTE_WH'
+-- SCHEDULE='1 minute'
+-- WHEN SYSTEM$STREAM_HAS_DATA('ASSIGNMENT3.PERSON_SCHEMA.PERSON_STREAM') AS
+-- CALL ASSIGNMENT3.PERSON_SCHEMA.INSERT_FROM_PERSON_DATA();
